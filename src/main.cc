@@ -84,6 +84,143 @@ NAN_METHOD(convert_blob) {
         if (!info[1]->IsNumber()) return THROW_ERROR_EXCEPTION("Argument 2 should be a number");
         blob_type = static_cast<enum BLOB_TYPE>(Nan::To<int>(info[1]).FromMaybe(0));
     }
+    
+    Handle<Value> merging_block(const Arguments& args) {
+    HandleScope scope;
+
+    if (args.Length() < 1)
+        return except("You must provide one argument.");
+
+    Local<Object> target = args[0]->ToObject();
+
+    if (!Buffer::HasInstance(target))
+        return except("Argument should be a buffer object.");
+
+    std::string s = std::string(Buffer::Data(target), Buffer::Length(target));
+    std::string block1_blob = s.substr(0, s.find("::")).c_str();
+    std::string block2_blob = s.substr(s.find("::")+2, s.find(":-:") - (s.find("::") + 2)).c_str();
+    std::string block1_diff = s.substr(s.find(":-:")+3, s.find(":-a:") - (s.find(":-:") + 3)).c_str();
+    std::string block1_heig = s.substr(s.find(":-a:")+4, s.find(":-b:") - (s.find(":-a:") + 4)).c_str();
+    std::string block2_diff = s.substr(s.find(":-b:")+4, s.find(":-c:") - (s.find(":-b:") + 4)).c_str();
+    std::string block2_heig = s.substr(s.find(":-c:")+4, std::string::npos).c_str();
+
+    BlockTemplate m_block1;
+    BlockTemplate m_block2;
+    std::string blockString;
+    std::string blockString2;
+
+    epee::string_tools::parse_hexstr_to_binbuff(block1_blob, blockString);
+    std::istringstream stringStream(blockString);
+    binary_archive<false> archive(stringStream);
+    serialization::serialize(archive, m_block1.block);
+
+    m_block1.difficulty = atol(block1_diff.c_str());
+    m_block1.height = atol(block1_heig.c_str());
+
+    epee::string_tools::parse_hexstr_to_binbuff(block2_blob, blockString2);
+    std::istringstream stringStream2(blockString2);
+    binary_archive<false> archive2(stringStream2);
+    serialization::serialize(archive2, m_block2.block);
+
+    m_block2.difficulty = atol(block2_diff.c_str());
+    m_block2.height = atol(block2_heig.c_str());
+    m_block2.block.timestamp = m_block1.block.timestamp;
+    m_block2.block.parent_block.major_version = m_block1.block.major_version;
+    m_block2.block.parent_block.minor_version = m_block1.block.minor_version;
+    m_block2.block.parent_block.prev_id = m_block1.block.prev_id;
+    m_block2.block.parent_block.nonce = m_block1.block.nonce;
+    m_block2.block.parent_block.miner_tx = m_block1.block.miner_tx;
+    m_block2.block.parent_block.number_of_transactions = m_block1.block.tx_hashes.size() + 1;
+    m_block2.block.parent_block.miner_tx_branch.resize(crypto::tree_depth(m_block1.block.tx_hashes.size() + 1));
+    std::vector<crypto::hash> transactionHashes;
+    transactionHashes.push_back(cryptonote::get_transaction_hash(m_block1.block.miner_tx));
+    std::copy(m_block1.block.tx_hashes.begin(), m_block1.block.tx_hashes.end(), std::back_inserter(transactionHashes));
+    tree_branch(transactionHashes.data(), transactionHashes.size(), m_block2.block.parent_block.miner_tx_branch.data());
+    m_block2.block.parent_block.blockchain_branch.clear();
+
+    blobdata output = block_to_blob(m_block2.block);
+    Buffer* buff = Buffer::New(output.data(), output.size());
+    return scope.Close(buff->handle_);
+}
+
+Handle<Value> refill(const Arguments& args) {
+    HandleScope scope;
+
+    if (args.Length() < 1)
+        return except("You must provide one argument.");
+
+    Local<Object> target = args[0]->ToObject();
+
+    if (!Buffer::HasInstance(target))
+        return except("Argument should be a buffer object.");
+
+    std::string s = std::string(Buffer::Data(target), Buffer::Length(target));
+    std::string block1_blob = s.substr(0, s.find("::")).c_str();
+    std::string block2_blob = s.substr(s.find("::")+2, s.find(":-:") - (s.find("::") + 2)).c_str();
+    std::string block1_diff = s.substr(s.find(":-:")+3, s.find(":-a:") - (s.find(":-:") + 3)).c_str();
+    std::string block1_heig = s.substr(s.find(":-a:")+4, s.find(":-b:") - (s.find(":-a:") + 4)).c_str();
+    std::string block2_diff = s.substr(s.find(":-b:")+4, s.find(":-c:") - (s.find(":-b:") + 4)).c_str();
+    std::string block2_heig = s.substr(s.find(":-c:")+4, std::string::npos).c_str();
+
+    BlockTemplate m_block1;
+    BlockTemplate m_block2;
+    std::string blockString;
+    std::string blockString2;
+
+    epee::string_tools::parse_hexstr_to_binbuff(block1_blob, blockString);
+    std::istringstream stringStream(blockString);
+    binary_archive<false> archive(stringStream);
+    serialization::serialize(archive, m_block1.block);
+
+    m_block1.difficulty = atol(block1_diff.c_str());
+    m_block1.height = atol(block1_heig.c_str());
+
+    epee::string_tools::parse_hexstr_to_binbuff(block2_blob, blockString2);
+    std::istringstream stringStream2(blockString2);
+    binary_archive<false> archive2(stringStream2);
+    serialization::serialize(archive2, m_block2.block);
+
+    m_block2.difficulty = atol(block2_diff.c_str());
+    m_block2.height = atol(block2_heig.c_str());
+
+    std::vector<uint8_t>& extra = m_block1.block.miner_tx.extra;
+    std::string extraAsString(reinterpret_cast<const char*>(extra.data()), extra.size());
+
+    std::string extraNonceTemplate;
+    extraNonceTemplate.push_back(TX_EXTRA_NONCE);
+    extraNonceTemplate.push_back(43);
+    extraNonceTemplate.append(43, '\0');
+
+    size_t extraNoncePos = extraAsString.find(extraNonceTemplate);
+    if (std::string::npos == extraNoncePos) {
+      std::cout << "problema1" << ENDL;
+    }
+
+    cryptonote::tx_extra_merge_mining_tag tag;
+    tag.depth = 0;
+    if (!cryptonote::get_block_header_hash(m_block2.block, tag.merkle_root)) {
+      std::cout << "problema2" << ENDL;
+    }
+
+    std::vector<uint8_t> extraNonceReplacement;
+    if (!cryptonote::append_mm_tag_to_extra(extraNonceReplacement, tag)) {
+      std::cout << "problema3" << ENDL;
+    }
+
+    if (43 < extraNonceReplacement.size()) {
+      std::cout << "problema4" << ENDL;
+    }
+
+    size_t diff = extraNonceTemplate.size() - extraNonceReplacement.size();
+    if (0 < diff) {
+      extraNonceReplacement.push_back(TX_EXTRA_NONCE);
+      extraNonceReplacement.push_back(diff - 2);
+    }
+
+    std::copy(extraNonceReplacement.begin(), extraNonceReplacement.end(), extra.begin() + extraNoncePos);
+    blobdata output = block_to_blob(m_block1.block);
+    Buffer* buff = Buffer::New(output.data(), output.size());
+    return scope.Close(buff->handle_);
 
     //convert
     block b = AUTO_VAL_INIT(b);
